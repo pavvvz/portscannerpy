@@ -68,3 +68,26 @@ Notes and cautions
 - Scanning networks or hosts without permission may be illegal or against terms of service. Only scan systems you own or have explicit permission to test.
 - Use appropriate worker and timeout values for your network conditions to avoid false negatives or overwhelming your machine.
 
+
+Discovery feature
+-----------------
+
+The scanner now includes a lightweight discovery mode to find live hosts inside a CIDR block using TCP connect probes. Discovery is intentionally concise and capped so you get a readable list instead of an endless output.
+
+Flags:
+- `--discover <CIDR>`: discover hosts in a CIDR range (e.g. `192.168.1.0/24`).
+- `--discover-port <port>`: the TCP port used to probe hosts during discovery (default 80). Use a port likely to be open in your target network (80, 443, 22, etc.).
+- `--discover-max <N>`: maximum number of discovered hosts to return (default 50). This keeps output readable.
+- `--scan-discovered`: after discovery completes, run the port scan against each discovered host (respects `--start`, `--end`, and `--workers`).
+
+Example: discover hosts in a /30 range and scan discovered hosts for ports 1-1024 (quiet per-port):
+
+```bash
+python main.py --discover 127.0.0.1/32 --discover-port 80 --discover-max 10 --scan-discovered --no-verbose --start 1 --end 1024
+```
+
+Notes on discovery behavior:
+- Discovery uses a TCP connect to a specified probe port; it does not use raw ICMP so it doesn't require elevated privileges.
+- The discovery result list is capped at `--discover-max` to avoid overwhelming output; if the cap is reached a message will be printed and discovery stops early.
+- After discovery, if `--scan-discovered` is used, scans are performed serially per discovered host to keep output clear. If you want parallel scanning across many hosts, consider scripting multiple runs or extending the tool.
+
