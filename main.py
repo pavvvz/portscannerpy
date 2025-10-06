@@ -37,23 +37,41 @@ def run_scan(
     timeout: float,
     verbose: bool = True,
 ) -> List[int]:
-    """Scan ports [start..end] using a ThreadPoolExecutor and return sorted open ports."""
+    """Scan ports [start..end] using a ThreadPoolExecutor and return sorted open ports.
+
+    When verbose is False the function prints periodic progress percentages instead of per-port lines.
+    """
     open_ports: List[int] = []
 
-    ports = range(start, end + 1)
+    ports = list(range(start, end + 1))
+    total = len(ports)
+    completed = 0
+    last_reported_pct = -1
+
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_port = {executor.submit(scan_port, target, p, timeout): p for p in ports}
 
         try:
             for future in as_completed(future_to_port):
                 port, is_open = future.result()
+                completed += 1
                 if is_open:
                     open_ports.append(port)
-                    if verbose:
+
+                if verbose:
+                    # keep old behavior when verbose
+                    if is_open:
                         print(f"[+] Port {port} is open")
-                else:
-                    if verbose:
+                    else:
                         print(f"[-] Port {port} is closed")
+                else:
+                    # print progress percentage updates (every ~5% or when changed for small totals)
+                    pct = int((completed / total) * 100)
+                    report_interval = max(1, total // 20)  # roughly every 5%
+                    if total <= 20 or (completed % report_interval == 0) or pct == 100:
+                        if pct != last_reported_pct:
+                            print(f"Progress: {pct}% ({completed}/{total})")
+                            last_reported_pct = pct
         except KeyboardInterrupt:
             # Attempt a polite shutdown
             print("\nInterrupted by user, shutting down...")
@@ -64,17 +82,19 @@ def run_scan(
     return open_ports
 
 
-def probe_host(ip: str, port: int = 80, timeout: float = 0.5) -> Tuple[str, bool]:
-    """Probe an IP address by attempting a TCP connection to (ip, port).
+def probe_host(ip: str, ports: List[int], timeout: float = 0.5) -> Tuple[str, bool, Optional[int]]:
+    """Probe an IP address by attempting TCP connections to provided ports.
 
-    Returns (ip, is_reachable).
+    Returns (ip, is_reachable, successful_port). If reachable, successful_port is the first port that responded.
     """
-    try:
-        conn = socket.create_connection((ip, port), timeout=timeout)
-        conn.close()
-        return ip, True
-    except Exception:
-        return ip, False
+    for port in ports:
+        try:
+            conn = socket.create_connection((ip, port), timeout=timeout)
+            conn.close()
+            return ip, True, port
+        except Exception:
+            continue
+    return ip, False, None
 
 
 def iter_ips_from_cidr(cidr: str):
@@ -84,7 +104,7 @@ def iter_ips_from_cidr(cidr: str):
         yield str(ip)
 
 
-def discover_network(cidr: str, probe_port: int = 80, timeout: float = 0.5, workers: int = 100, max_hosts: int = 50) -> List[str]:
+def discover_network(cidr: str, probe_ports: List[int], timeout: float = 0.5, workers: int = 100, max_hosts: int = 50) -> List[str]:
     """Discover live hosts in a CIDR using TCP probe.
 
     Returns a list of discovered IP addresses, capped at max_hosts to keep output readable.
@@ -93,13 +113,13 @@ def discover_network(cidr: str, probe_port: int = 80, timeout: float = 0.5, work
     ips = list(iter_ips_from_cidr(cidr))
 
     with ThreadPoolExecutor(max_workers=min(workers, len(ips) or 1)) as executor:
-        future_to_ip = {executor.submit(probe_host, ip, probe_port, timeout): ip for ip in ips}
+        future_to_ip = {executor.submit(probe_host, ip, probe_ports, timeout): ip for ip in ips}
         try:
             for future in as_completed(future_to_ip):
-                ip, alive = future.result()
+                ip, alive, ok_port = future.result()
                 if alive:
                     discovered.append(ip)
-                    print(f"[+] Host {ip} appears up (port {probe_port})")
+                    print(f"[+] Host {ip} appears up (responded on port {ok_port})")
                     if len(discovered) >= max_hosts:
                         print(f"Reached discovery cap of {max_hosts} hosts; stopping discovery to keep output concise.")
                         break
@@ -177,7 +197,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--format", choices=("txt", "csv", "json"), default="txt", help="Output file format (txt, csv, json)")
     # Discovery options
     parser.add_argument("--discover", help="Discover live hosts in a CIDR (e.g. 192.168.1.0/24)")
-    parser.add_argument("--discover-port", type=int, default=80, help="TCP port used to probe hosts during discovery (default: 80)")
+    parser.add_argument("--discover-port", type=int, default=80, help="(legacy) single TCP port used to probe hosts during discovery (default: 80)")
+    parser.add_argument("--discover-ports", type=str, help="Comma-separated list of TCP ports to probe during discovery (e.g. 22,80,443). If set, overrides --discover-port.")
     parser.add_argument("--discover-max", type=int, default=50, help="Maximum number of discovered hosts to return (keeps output readable, default 50)")
     parser.add_argument("--scan-discovered", action="store_true", help="After discovery, run the port scan against discovered hosts")
     return parser.parse_args()
@@ -195,7 +216,14 @@ def main() -> None:
     if args.discover:
         print(f"Discovering hosts in {args.discover} (probing TCP/{args.discover_port})...")
         try:
-            discovered = discover_network(args.discover, probe_port=args.discover_port, timeout=args.timeout, workers=args.workers, max_hosts=args.discover_max)
+            # parse discover ports: either comma-separated list or single legacy port
+            if args.discover_ports:
+                ports = [int(p.strip()) for p in args.discover_ports.split(",") if p.strip()]
+            else:
+                ports = [args.discover_port]
+
+            print(f"Probing ports: {ports}")
+            discovered = discover_network(args.discover, probe_ports=ports, timeout=args.timeout, workers=args.workers, max_hosts=args.discover_max)
         except KeyboardInterrupt:
             print("Discovery aborted by user.")
             return

@@ -76,12 +76,39 @@ The scanner now includes a lightweight discovery mode to find live hosts inside 
 
 Flags:
 - `--discover <CIDR>`: discover hosts in a CIDR range (e.g. `192.168.1.0/24`).
-- `--discover-port <port>`: the TCP port used to probe hosts during discovery (default 80). Use a port likely to be open in your target network (80, 443, 22, etc.).
-- `--discover-max <N>`: maximum number of discovered hosts to return (default 50). This keeps output readable.
-- `--scan-discovered`: after discovery completes, run the port scan against each discovered host (respects `--start`, `--end`, and `--workers`).
+ - `--discover-ports <p1,p2,...>`: comma-separated list of ports to try during discovery (e.g. `22,80,443`). If provided, the discovery phase will consider a host "up" if any of the listed ports responds; this improves coverage compared to probing a single port.
 
-Example: discover hosts in a /30 range and scan discovered hosts for ports 1-1024 (quiet per-port):
+Tip: to improve discovery coverage, try several ports commonly open in your environment. Example:
 
+```bash
+python main.py --discover 192.168.1.0/24 --discover-ports 22,80,443 --discover-max 100
+```
+
+Output behavior and progress
+---------------------------
+
+The scanner now reduces noisy per-port output by default (when `--no-verbose` is used). Instead of printing a line for every scanned port, the scanner prints periodic progress percentage updates and only lists the open ports at the end.
+
+Behavior summary:
+- Verbose (default): per-port status lines are printed, e.g. `[+] Port 22 is open` or `[-] Port 23 is closed`.
+- Quiet (`--no-verbose`): periodic progress updates like `Progress: 20% (200/1000)` are printed roughly every 5% (or more frequently for small scans). At the end you get a short list of open ports only.
+
+Examples:
+
+- Verbose (per-port lines):
+
+```bash
+python main.py 10.0.0.5 --start 1 --end 200
+```
+
+- Quiet (progress percentages + final open ports):
+
+```bash
+python main.py 10.0.0.5 --start 1 --end 200 --no-verbose
+```
+
+Progress tuning (advanced):
+- If you want more control over progress output frequency, let me add a `--progress-interval` option that prints progress every N ports or every N percent. Tell me if you want that and I'll add it.
 ```bash
 python main.py --discover 127.0.0.1/32 --discover-port 80 --discover-max 10 --scan-discovered --no-verbose --start 1 --end 1024
 ```
