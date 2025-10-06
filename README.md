@@ -1,84 +1,70 @@
 # Simple Port Scanner (Python)
 
-This repository contains a small threaded TCP port scanner implemented in `main.py`.
+This repository contains an upgraded threaded TCP port scanner implemented in `main.py`.
 
-It scans a range of TCP ports on a target host and optionally writes results to a dated output file named `scan_results_<MM-DD-YYYY_HH-MM-SS>.txt`.
+It scans a range of TCP ports on a target host and can optionally save results to a timestamped file. The scanner now uses Python's
+`concurrent.futures.ThreadPoolExecutor`, supports `--no-verbose` to reduce per-port output, and can write results in `txt`, `csv`, or `json` format.
 
-Below is a row-by-row explanation of `main.py` so you can understand exactly what each line does.
+Below is a row-by-row explanation of the new `main.py` so you can follow how it works and what each section does.
 
-File: `main.py`
+File: `main.py` (high-level sections)
 
-1-3: Shebang and module docstring
- - #!/usr/bin/env python3
-   - Tells the system to run this script with the user's python3 interpreter when executed directly.
- - Triple-quoted string
-   - Provides a short description and usage example for the script.
+- Shebang and module docstring
+  - `#!/usr/bin/env python3` ensures the script runs with Python3 when executed directly.
+  - The module docstring briefly describes the script and the new features.
 
-5: from __future__ import annotations
- - Enables postponed evaluation of annotations (PEP 563) so type hints are stored as strings. Safe for modern Python.
+- Imports
+  - `argparse` to parse CLI arguments.
+  - `datetime` and `json` for timestamped output files and JSON output.
+  - `socket` to create TCP connections.
+  - `ThreadPoolExecutor` and `as_completed` from `concurrent.futures` to scan ports concurrently.
+  - `typing` for type hints.
 
-7-13: imports
- - argparse: parse CLI arguments
- - datetime: build timestamped filenames
- - socket: create TCP sockets for scanning
- - threading: run worker threads
- - Queue from queue: thread-safe queue for ports to scan
- - typing: List for type hints
+- `scan_port(target, port, timeout)`
+  - Uses `socket.create_connection((target, port), timeout=timeout)` which resolves the target and attempts to connect.
+  - Returns `(port, True)` when a connection succeeds (port open), otherwise `(port, False)`.
 
-15-23: scan_port function
- - def scan_port(target: str, port: int, timeout: float = 1.0) -> bool:
-   - Attempts a TCP connection to target:port using socket.socket.
- - s.settimeout(timeout): limits wait time for connection attempt.
- - s.connect_ex((target, port)) returns 0 on success (open), non-zero on failure.
- - Returns True if port is open, False otherwise. Any exceptions return False.
+- `run_scan(target, start, end, workers, timeout, verbose)`
+  - Builds a thread pool with `max_workers=workers` and submits `scan_port` for each port in the range.
+  - As each future completes, `future.result()` gives `(port, is_open)`.
+  - If `verbose` is True, prints per-port status lines like `[+] Port 22 is open` or `[-] Port 23 is closed`.
+  - Handles `KeyboardInterrupt` by politely asking the executor to shutdown and re-raising.
+  - Returns a sorted list of open ports.
 
-25-41: worker function
- - Each thread runs this function, repeatedly pulling a port from the queue and scanning it.
- - If the queue returns None, the worker treats that as a sentinel to exit.
- - If a port is open, it appends the port to the shared results list and prints a message.
- - q.task_done() signals the queue that the task has been processed.
+- `write_output(...)`
+  - Creates a timestamped filename with the provided `outname_prefix` and the chosen `fmt` extension.
+  - For `txt`, writes metadata and a simple list of open ports.
+  - For `csv`, writes a single-column CSV with `port` header.
+  - For `json`, writes a structured JSON object with metadata and `open_ports` array.
 
-43-86: run_scan function
- - Sets up the queue, enqueues the requested port range, and starts the worker threads.
- - Waits for the queue to be fully processed with q.join().
- - Sends None sentinel values to stop worker threads and joins them.
- - Sorts the results list of open ports.
- - If write_output is True, writes a text file with a timestamped filename containing scan metadata and the open ports.
- - Returns the list of open ports.
+- `parse_args()`
+  - New CLI options:
+    - `--workers` instead of `--threads` (default 100)
+    - `--no-verbose` to disable per-port printing
+    - `--output` to save results
+    - `--outname` to change filename prefix
+    - `--format` choose between `txt`, `csv`, and `json`
 
-88-97: parse_args function
- - Defines CLI arguments:
-   - target (positional): hostname or IP to scan
-   - --start / --end: port range (defaults 1 to 1024)
-   - --threads: number of worker threads (default 100)
-   - --timeout: socket timeout in seconds (default 0.5)
-   - --output: boolean flag to write results to a dated file
-
-99-120: main function
- - Parses arguments and validates the port range.
- - Calls run_scan with the provided options and prints the final summary of open ports.
-
-122-123: if __name__ == "__main__":
- - Standard Python pattern so the script runs main() when executed directly.
+- `main()`
+  - Validates the port range.
+  - Calls `run_scan` and prints a final summary of open ports.
+  - If `--output` is set, calls `write_output` to save results.
 
 Usage examples
- - Scan localhost common ports and print output:
+
+- Scan localhost (print per-port output):
 
 ```bash
 python main.py 127.0.0.1 --start 1 --end 1024
 ```
 
- - Scan with output file saved (file name includes timestamp):
+- Scan and save results as JSON with a custom filename prefix:
 
 ```bash
-python main.py example.com --start 1 --end 65535 --threads 200 --output
+python main.py example.com --start 1 --end 65535 --workers 200 --output --format json --outname myscan
 ```
 
 Notes and cautions
- - Scanning networks or hosts without permission may be illegal or against terms of service. Only scan systems you own or have explicit permission to test.
- - Use appropriate thread and timeout values for your network conditions.
+- Scanning networks or hosts without permission may be illegal or against terms of service. Only scan systems you own or have explicit permission to test.
+- Use appropriate worker and timeout values for your network conditions to avoid false negatives or overwhelming your machine.
 
-Optional improvements (left as exercises)
- - Add reverse DNS or service banner grabbing.
- - Add async/asyncio-based scanner for potentially higher throughput.
- - Add CSV/JSON output formats and more detailed logging.
